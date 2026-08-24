@@ -71,19 +71,18 @@ async def cb_check_sub(callback: CallbackQuery, bot: Bot, db: Database) -> None:
         await callback.answer("Texnik xatolik yuz berdi. Keyinroq urinib ko'ring.", show_alert=True)
         return
 
-    missing = False
+    missing_channels = []
     for channel in channels:
         if not await is_user_subscribed(bot, channel.channel_username, user.id):
-            missing = True
-            break
+            missing_channels.append(channel)
 
-    if missing:
+    if missing_channels:
         await callback.answer(NOT_SUBSCRIBED, show_alert=True)
         try:
             if callback.message:
                 await callback.message.edit_text(
                     "👋 Salom! Botdan foydalanish uchun quyidagi kanallarga a'zo bo'lishingiz kerak:",
-                    reply_markup=subscription_kb(channels),
+                    reply_markup=subscription_kb(missing_channels),
                 )
         except Exception:
             logger.debug("Obuna xabarini tahrirlab bo'lmadi (o'zgarishsiz bo'lishi mumkin).")

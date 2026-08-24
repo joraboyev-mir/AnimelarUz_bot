@@ -64,7 +64,7 @@ class SubscriptionMiddleware(BaseMiddleware):
         if not missing:
             return await handler(event, data)
 
-        markup = subscription_kb(channels)
+        markup = subscription_kb(missing)
         try:
             if callback is not None:
                 await callback.answer()
