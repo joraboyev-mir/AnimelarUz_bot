@@ -38,5 +38,6 @@ jobs:
           SUPER_ADMIN_ID: ${{ secrets.SUPER_ADMIN_ID }}
           MAIN_CHANNEL_ID: ${{ secrets.MAIN_CHANNEL_ID }}
           MAIN_CHANNEL_USERNAME: ${{ secrets.MAIN_CHANNEL_USERNAME }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python main.py
