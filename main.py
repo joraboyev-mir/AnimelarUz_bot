@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import ErrorEvent
+from aiogram.types import BotCommand, ErrorEvent
 
 from config import BOT_TOKEN, setup_logging, validate_config
 from database.db import Database
@@ -19,6 +19,20 @@ from middlewares.subscription import SubscriptionMiddleware
 logger = logging.getLogger(__name__)
 
 
+async def set_bot_commands(bot: Bot) -> None:
+    commands = [
+        BotCommand(command="start", description="Botni ishga tushirish / Asosiy menyu"),
+        BotCommand(command="help", description="Yordam va muammoni adminga yuborish"),
+        BotCommand(command="top", description="Eng ommabop animelar reytingi"),
+        BotCommand(command="search", description="Anime qidirish"),
+    ]
+    try:
+        await bot.set_my_commands(commands)
+        logger.info("Bot buyruqlari o'rnatildi.")
+    except Exception:
+        logger.exception("Bot buyruqlarini o'rnatishda xatolik.")
+
+
 async def on_startup(bot: Bot) -> None:
     me = await bot.get_me()
     logger.info("Bot ishga tushdi: @%s (id=%s)", me.username, me.id)
@@ -26,6 +40,8 @@ async def on_startup(bot: Bot) -> None:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception:
         logger.exception("Webhook ni o'chirishda xatolik.")
+    await set_bot_commands(bot)
+
 
 
 async def on_shutdown(bot: Bot) -> None:

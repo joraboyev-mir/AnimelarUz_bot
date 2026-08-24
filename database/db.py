@@ -356,6 +356,38 @@ class Database:
             )
         return items
 
+    async def get_top_anime(self, limit: int = 10) -> list[AnimeCatalogItem]:
+        rows = await self._execute(
+            """
+            SELECT
+                MIN(id) AS sample_id,
+                title,
+                hashtag,
+                MAX(total_episodes) AS total_episodes,
+                COUNT(*) AS available_episodes,
+                SUM(views) AS views
+            FROM anime
+            GROUP BY LOWER(title), LOWER(hashtag)
+            ORDER BY SUM(views) DESC, MAX(id) DESC
+            LIMIT ?
+            """,
+            (limit,),
+            fetchall=True,
+        )
+        items: list[AnimeCatalogItem] = []
+        for row in rows or []:
+            items.append(
+                AnimeCatalogItem(
+                    sample_id=int(row["sample_id"]),
+                    title=row["title"],
+                    hashtag=row["hashtag"],
+                    total_episodes=int(row["total_episodes"] or 0),
+                    available_episodes=int(row["available_episodes"] or 0),
+                    views=int(row["views"] or 0),
+                )
+            )
+        return items
+
     async def get_first_episode(self, title: str, hashtag: str) -> Optional[AnimeRecord]:
         row = await self._execute(
             """

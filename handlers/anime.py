@@ -10,19 +10,20 @@ from urllib.parse import quote
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InputMediaVideo, Message
 
 from config import MAIN_CHANNEL_ID, MAIN_CHANNEL_USERNAME, PAGE_SIZE
 from database.db import AnimeRecord, Database
-from keyboards.inline import back_to_menu_kb, catalog_kb, episode_nav_kb, main_menu_kb
+from keyboards.inline import back_to_menu_kb, catalog_kb, episode_nav_kb, main_menu_kb, top_anime_kb
 from states.admin_states import SearchSG
 
 logger = logging.getLogger(__name__)
 router = Router(name="anime")
 
 _channel_username_cache: Optional[str] = None
+
 
 
 async def resolve_channel_username(bot: Bot) -> str:
@@ -165,6 +166,63 @@ async def cb_search_page(callback: CallbackQuery, db: Database, state: FSMContex
         await callback.answer("Qidiruvni yuklab bo'lmadi.", show_alert=True)
 
 
+# ── Qidiruv va TOP animelar ───────────────────────────────────────────────
+
+@router.message(Command("search"))
+async def cmd_search(message: Message, db: Database, state: FSMContext) -> None:
+    await state.clear()
+    args = message.text.split(maxsplit=1)[1].strip() if message.text and " " in message.text else ""
+    if args:
+        await state.update_data(search_query=args)
+        try:
+            total = await db.count_unique_anime(args)
+            if total == 0:
+                await message.answer(
+                    f"🔍 <code>{html.escape(args)}</code> bo'yicha hech narsa topilmadi.",
+                    reply_markup=back_to_menu_kb(),
+                )
+                return
+            total_pages = max(1, math.ceil(total / PAGE_SIZE))
+            items = await db.get_catalog_page(0, PAGE_SIZE, args)
+            await message.answer(
+                "🔍 <b>Qidiruv natijalari</b>\n"
+                f"So'rov: <code>{html.escape(args)}</code>\n"
+                f"Sahifa: <b>1/{total_pages}</b> • Jami: <b>{total}</b>",
+                reply_markup=catalog_kb(items, 0, total_pages, search=True),
+            )
+            return
+        except Exception:
+            logger.exception("Qidiruvda xatolik.")
+
+    await state.set_state(SearchSG.query)
+    await message.answer(
+        "🔍 <b>Anime qidirish</b>\n\n"
+        "Qidirmoqchi bo'lgan anime nomini yoki hashtag'ini yozib yuboring:",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+@router.message(Command("top"))
+async def cmd_top(message: Message, db: Database, state: FSMContext) -> None:
+    await state.clear()
+    try:
+        top_items = await db.get_top_anime(limit=10)
+        if not top_items:
+            await message.answer("Hozircha animelar bazasi bo'sh.", reply_markup=main_menu_kb())
+            return
+
+        lines = ["🔥 <b>Eng ko'p ko'rilgan TOP animelar reytingi:</b>\n"]
+        for idx, item in enumerate(top_items, start=1):
+            medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"<b>{idx}.</b>"
+            lines.append(f"{medal} <b>{html.escape(item.title)}</b> — 👁 <b>{item.views}</b> ko'rishlar")
+
+        text = "\n".join(lines) + "\n\nTomosha qilish uchun quyidagi tugmalardan birini bosing:"
+        await message.answer(text, reply_markup=top_anime_kb(top_items))
+    except Exception:
+        logger.exception("Top animelarni olishda xatolik.")
+        await message.answer("Top animelarni yuklashda xatolik yuz berdi.", reply_markup=main_menu_kb())
+
+
 @router.callback_query(F.data == "anime_search")
 async def cb_anime_search(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SearchSG.query)
@@ -174,6 +232,7 @@ async def cb_anime_search(callback: CallbackQuery, state: FSMContext) -> None:
             "🔍 <b>Qidirish</b>\n\nAnime nomi yoki hashtag yuboring:",
             reply_markup=back_to_menu_kb(),
         )
+
 
 
 @router.message(StateFilter(SearchSG.query), F.text)

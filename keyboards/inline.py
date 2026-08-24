@@ -203,3 +203,25 @@ def finish_videos_kb() -> InlineKeyboardMarkup:
     builder.adjust(1)
     return builder.as_markup()
 
+
+def help_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✍️ Murojaat / Muammoni yuborish", callback_data="send_feedback")
+    builder.button(text="🏠 Asosiy menyu", callback_data="main_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def top_anime_kb(items: Sequence[AnimeCatalogItem]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for idx, item in enumerate(items, start=1):
+        medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"{idx}."
+        builder.button(
+            text=f"{medal} {item.title} (👁 {item.views})",
+            callback_data=f"open_anime_{item.sample_id}",
+        )
+    builder.button(text="🏠 Asosiy menyu", callback_data="main_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+

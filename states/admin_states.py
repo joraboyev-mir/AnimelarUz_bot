@@ -32,3 +32,8 @@ class ForwardAnimeSG(StatesGroup):
     """Admin forward qilgan video uchun preview holati."""
     preview = State()
 
+
+class FeedbackSG(StatesGroup):
+    text = State()
+
+

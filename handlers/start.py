@@ -1,18 +1,16 @@
-"""Public entry handlers: /start, main menu, deep-link watch, and subscription verification."""
-
-from __future__ import annotations
-
+import html
 import logging
 
 from aiogram import Bot, F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from config import MAIN_CHANNEL_ID, MAIN_CHANNEL_USERNAME
+from config import MAIN_CHANNEL_ID, MAIN_CHANNEL_USERNAME, SUPER_ADMIN_ID
 from database.db import Database
-from keyboards.inline import main_menu_kb, subscription_kb, watch_anime_kb
+from keyboards.inline import help_kb, main_menu_kb, subscription_kb, watch_anime_kb
 from middlewares.subscription import is_user_subscribed
+from states.admin_states import FeedbackSG
 
 logger = logging.getLogger(__name__)
 router = Router(name="start")
@@ -22,7 +20,16 @@ WELCOME_TEXT = (
     "Bu yerda sevimli animelaringizni o'zbek tilida tomosha qilishingiz mumkin.\n"
     "Ro'yxatdan anime tanlang yoki qidiruvdan foydalaning."
 )
+HELP_TEXT = (
+    "ℹ️ <b>AnimeUz botidan foydalanish bo'yicha yordam</b>\n\n"
+    "• /start — Botni ishga tushirish va asosiy menyu\n"
+    "• /top — Eng ko'p ko'rilgan ommabop animelar reytingi\n"
+    "• /search — Animelarni nomi yoki kalit so'zi bo'yicha qidirish\n"
+    "• /help — Yordam va adminga murojaat\n\n"
+    "Agar botda biror xatolik yoki muammoga duch kelsangiz, quyidagi tugma orqali adminga xabar qoldirishingiz mumkin."
+)
 NOT_SUBSCRIBED = "❗️ Hali barcha kanallarga a'zo emassiz. Iltimos, obunani yakunlang."
+
 SUBSCRIBED_OK = "✅ Obuna tasdiqlandi! Endi botdan bemalol foydalanishingiz mumkin."
 
 
@@ -238,3 +245,55 @@ async def cb_check_sub(callback: CallbackQuery, bot: Bot, db: Database) -> None:
     except Exception:
         if callback.message:
             await callback.message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
+
+
+# ── /help va Murojaat xendlerlari ────────────────────────────────────────
+
+@router.message(Command("help"))
+async def cmd_help(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(HELP_TEXT, reply_markup=help_kb())
+
+
+@router.callback_query(F.data == "send_feedback")
+async def cb_send_feedback(callback: CallbackQuery, state: FSMContext) -> None:
+    from keyboards.inline import cancel_kb
+    await state.set_state(FeedbackSG.text)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "✍️ <b>Murojaat / Muammoni yozing:</b>\n\n"
+            "Xabaringiz to'g'ridan-to'g'ri administratorga yetkaziladi.",
+            reply_markup=cancel_kb(),
+        )
+
+
+@router.message(StateFilter(FeedbackSG.text), F.text)
+async def process_feedback(message: Message, bot: Bot, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    if len(text) < 4:
+        await message.answer("Xabaringiz juda qisqa. Iltimos batafsilroq yozing:")
+        return
+    await state.clear()
+    user = message.from_user
+    user_name = user.full_name if user else "Noma'lum"
+    username_str = f"@{user.username}" if user and user.username else "mavjud emas"
+    admin_notification = (
+        "📩 <b>Yangi murojaat / muammo xabari!</b>\n\n"
+        f"👤 Kimdan: <b>{html.escape(user_name)}</b>\n"
+        f"🆔 ID: <code>{user.id if user else 0}</code>\n"
+        f"🔗 Username: {username_str}\n\n"
+        f"📝 <b>Matn:</b>\n{html.escape(text)}"
+    )
+    try:
+        await bot.send_message(SUPER_ADMIN_ID, admin_notification)
+    except Exception:
+        logger.exception("Murojaatni adminga yuborishda xatolik.")
+
+    await message.answer(
+        "✅ <b>Murojaatingiz adminga yuborildi!</b>\n"
+        "Tez orada ko'rib chiqiladi. Rahmat!",
+        reply_markup=main_menu_kb(),
+    )
+
+
