@@ -41,6 +41,10 @@ class SubscriptionMiddleware(BaseMiddleware):
         if chat_type != "private":
             return await handler(event, data)
 
+        if isinstance(event, Message) and event.text and event.text.startswith("/start"):
+            return await handler(event, data)
+
+
         if callback is not None and callback.data == "check_sub":
             return await handler(event, data)
 

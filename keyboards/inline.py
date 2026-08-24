@@ -186,3 +186,20 @@ def watch_anime_kb(bot_username: str, anime_id: int) -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
+
+def anime_status_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Davom etmoqda", callback_data="status_ongoing")
+    builder.button(text="Tugallangan", callback_data="status_completed")
+    builder.button(text="❌ Bekor qilish", callback_data="admin_cancel")
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+
+def finish_videos_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Videolarni saqlash", callback_data="finish_videos")
+    builder.button(text="❌ Bekor qilish", callback_data="admin_cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+

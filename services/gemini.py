@@ -24,19 +24,19 @@ def _get_client() -> genai.Client:
 
 class AnimeInfo(NamedTuple):
     genres: str        # masalan: "Sarguzasht, Fantastika, Drama"
-    description: str   # O'zbek tilida 2 gaplik ta'rif
+    description: str   # O'zbek tilida 4 gaplik ta'rif
 
 
 _FALLBACK = AnimeInfo(
     genres="Sarguzasht, Fantastika",
-    description="Bu anime ajoyib voqealar va qahramonlik bilan to'la. Tomosha qilishga arziydi!",
+    description="Bu anime ajoyib voqealar va qahramonlik bilan to'la. Tomosha qilishga arziydi! Har bir qismida kutilmagan burilishlar bor. Barcha yoshdagi tomoshabinlar uchun qiziqarli.",
 )
 
 _PROMPT_TPL = (
     'Anime: "{title}"\n\n'
     "Menga faqat quyidagi formatda javob ber, boshqa hech narsa yozma:\n"
     "Janrlar: <2-3 ta janr, vergul bilan ajratilgan>\n"
-    "Tavsif: <O'zbek tilida 2 gaplik qiziqarli ta'rif>"
+    "Tavsif: <O'zbek tilida kamida 4 ta mazmunli va qiziqarli gapdan iborat bo'lgan, animening haqiqiy mazmuni va voqealar rivojini to'liq ochib beradigan batafsil ta'rif>"
 )
 
 
@@ -53,7 +53,7 @@ async def fetch_anime_info(title: str) -> AnimeInfo:
             model="gemini-2.0-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
-                max_output_tokens=200,
+                max_output_tokens=500,
                 temperature=0.7,
             ),
         )

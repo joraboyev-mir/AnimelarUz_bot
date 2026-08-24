@@ -26,14 +26,14 @@ NOT_SUBSCRIBED = "❗️ Hali barcha kanallarga a'zo emassiz. Iltimos, obunani y
 SUBSCRIBED_OK = "✅ Obuna tasdiqlandi! Endi botdan bemalol foydalanishingiz mumkin."
 
 
-async def _check_main_channel_sub(bot: Bot, user_id: int) -> bool:
-    """Foydalanuvchi asosiy kanalga obuna bo'lganligini tekshiradi."""
-    channel_ref: str | int
-    if MAIN_CHANNEL_USERNAME:
-        channel_ref = f"@{MAIN_CHANNEL_USERNAME}" if not MAIN_CHANNEL_USERNAME.startswith("@") else MAIN_CHANNEL_USERNAME
-    else:
-        channel_ref = MAIN_CHANNEL_ID
-    return await is_user_subscribed(bot, str(channel_ref), user_id)
+async def _get_missing_channels(bot: Bot, db: Database, user_id: int) -> list:
+    """Foydalanuvchi obuna bo'lmagan majburiy kanallarni qaytaradi."""
+    channels = await db.get_all_channels()
+    missing = []
+    for channel in channels:
+        if not await is_user_subscribed(bot, channel.channel_username, user_id):
+            missing.append(channel)
+    return missing
 
 
 @router.message(CommandStart(deep_link=True, deep_link_encoded=False))
@@ -66,24 +66,19 @@ async def cmd_start_deep(message: Message, bot: Bot, db: Database, state: FSMCon
             await message.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
             return
 
-        # Asosiy kanalga obuna tekshiruvi
-        is_subscribed = await _check_main_channel_sub(bot, user.id)
+        # Barcha majburiy kanallarga obuna tekshiruvi
+        missing = await _get_missing_channels(bot, db, user.id)
 
-        if not is_subscribed:
-            # Asosiy kanalga obuna tugmasi ko'rsatiladi
-            channel_url = (
-                f"https://t.me/{MAIN_CHANNEL_USERNAME}"
-                if MAIN_CHANNEL_USERNAME
-                else f"https://t.me/c/{str(MAIN_CHANNEL_ID).replace('-100', '')}"
-            )
+        if missing:
             from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
             from aiogram.utils.keyboard import InlineKeyboardBuilder
             builder = InlineKeyboardBuilder()
-            builder.button(text="📢 Kanalga a'zo bo'lish", url=channel_url)
+            for channel in missing:
+                builder.button(text=f"📢 {channel.channel_title}", url=channel.channel_url)
             builder.button(text="✅ Obunani tasdiqlash", callback_data=f"check_watch_{anime_id}")
             builder.adjust(1)
             await message.answer(
-                "🔒 Videoni tomosha qilish uchun avval kanalimizga a'zo bo'ling:",
+                "🔒 Videoni tomosha qilish uchun avval quyidagi kanallarga a'zo bo'ling:",
                 reply_markup=builder.as_markup(),
             )
             return
@@ -157,9 +152,9 @@ async def cb_check_watch_sub(callback: CallbackQuery, bot: Bot, db: Database) ->
         return
 
     user = callback.from_user
-    is_subscribed = await _check_main_channel_sub(bot, user.id)
+    missing = await _get_missing_channels(bot, db, user.id)
 
-    if not is_subscribed:
+    if missing:
         await callback.answer(NOT_SUBSCRIBED, show_alert=True)
         return
 

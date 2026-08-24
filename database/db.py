@@ -28,6 +28,8 @@ class UserRecord:
 class AnimeRecord:
     id: int
     title: str
+    season: str
+    status: str
     current_episode: int
     total_episodes: int
     file_id: str
@@ -97,6 +99,8 @@ class Database:
             CREATE TABLE IF NOT EXISTS anime (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
+                season TEXT DEFAULT '1-Fasl',
+                status TEXT DEFAULT 'Davom etmoqda',
                 current_episode INTEGER NOT NULL,
                 total_episodes INTEGER NOT NULL,
                 file_id TEXT NOT NULL,
@@ -122,6 +126,14 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_anime_episode ON anime(title, current_episode);
             """
         )
+        try:
+            await db.execute("ALTER TABLE anime ADD COLUMN season TEXT DEFAULT '1-Fasl'")
+        except aiosqlite.OperationalError:
+            pass
+        try:
+            await db.execute("ALTER TABLE anime ADD COLUMN status TEXT DEFAULT 'Davom etmoqda'")
+        except aiosqlite.OperationalError:
+            pass
 
     async def _execute(
         self,
@@ -189,35 +201,37 @@ class Database:
     async def add_anime(
         self,
         title: str,
+        season: str,
+        status: str,
         current_episode: int,
         total_episodes: int,
         file_id: str,
         hashtag: str,
     ) -> int:
-        existing = await self.get_episode_by_title(title, current_episode)
+        existing = await self.get_episode_by_title_and_season(title, season, current_episode)
         if existing:
             await self._execute(
                 """
                 UPDATE anime
-                SET total_episodes = ?, file_id = ?, hashtag = ?
+                SET total_episodes = ?, file_id = ?, hashtag = ?, status = ?
                 WHERE id = ?
                 """,
-                (total_episodes, file_id, hashtag, existing.id),
+                (total_episodes, file_id, hashtag, status, existing.id),
                 commit=True,
             )
-            logger.info("Anime qismi yangilandi: %s #%s (id=%s)", title, current_episode, existing.id)
+            logger.info("Anime qismi yangilandi: %s (%s) #%s", title, season, current_episode)
             return existing.id
 
         last_id = await self._execute(
             """
-            INSERT INTO anime (title, current_episode, total_episodes, file_id, hashtag, views)
-            VALUES (?, ?, ?, ?, ?, 0)
+            INSERT INTO anime (title, season, status, current_episode, total_episodes, file_id, hashtag, views)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
             """,
-            (title, current_episode, total_episodes, file_id, hashtag),
+            (title, season, status, current_episode, total_episodes, file_id, hashtag),
             commit=True,
         )
         new_id = int(last_id or 0)
-        logger.info("Yangi anime qismi saqlandi: %s #%s (id=%s)", title, current_episode, new_id)
+        logger.info("Yangi anime qismi saqlandi: %s (%s) #%s", title, season, current_episode)
         return new_id
 
     async def get_anime_by_id(self, anime_id: int) -> Optional[AnimeRecord]:
@@ -228,14 +242,14 @@ class Database:
         )
         return self._anime_from_row(row) if row else None
 
-    async def get_episode_by_title(self, title: str, episode: int) -> Optional[AnimeRecord]:
+    async def get_episode_by_title_and_season(self, title: str, season: str, episode: int) -> Optional[AnimeRecord]:
         row = await self._execute(
             """
             SELECT * FROM anime
-            WHERE LOWER(title) = LOWER(?) AND current_episode = ?
+            WHERE LOWER(title) = LOWER(?) AND LOWER(season) = LOWER(?) AND current_episode = ?
             LIMIT 1
             """,
-            (title, episode),
+            (title, season, episode),
             fetchone=True,
         )
         return self._anime_from_row(row) if row else None
@@ -244,17 +258,19 @@ class Database:
         self,
         title: str,
         hashtag: str,
+        season: str,
         episode: int,
     ) -> Optional[AnimeRecord]:
         row = await self._execute(
             """
             SELECT * FROM anime
             WHERE (LOWER(title) = LOWER(?) OR LOWER(hashtag) = LOWER(?))
+              AND LOWER(season) = LOWER(?)
               AND current_episode = ?
             ORDER BY id DESC
             LIMIT 1
             """,
-            (title, hashtag, episode),
+            (title, hashtag, season, episode),
             fetchone=True,
         )
         return self._anime_from_row(row) if row else None
@@ -345,7 +361,7 @@ class Database:
             """
             SELECT * FROM anime
             WHERE LOWER(title) = LOWER(?) OR LOWER(hashtag) = LOWER(?)
-            ORDER BY current_episode ASC, id ASC
+            ORDER BY season ASC, current_episode ASC, id ASC
             LIMIT 1
             """,
             (title, hashtag),
@@ -494,6 +510,8 @@ class Database:
         return AnimeRecord(
             id=int(row["id"]),
             title=row["title"],
+            season=row.get("season", "1-Fasl") or "1-Fasl",
+            status=row.get("status", "Davom etmoqda") or "Davom etmoqda",
             current_episode=int(row["current_episode"]),
             total_episodes=int(row["total_episodes"]),
             file_id=row["file_id"],

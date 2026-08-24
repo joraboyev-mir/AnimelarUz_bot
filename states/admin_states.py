@@ -5,10 +5,14 @@ from aiogram.fsm.state import State, StatesGroup
 
 class AddAnimeSG(StatesGroup):
     title = State()
-    current_episode = State()
-    total_episodes = State()
+    season = State()
+    start_episode = State()
+    status = State()
     hashtag = State()
-    video = State()
+    banner = State()
+    videos = State()
+    preview = State()
+
 
 
 class ChannelSG(StatesGroup):
