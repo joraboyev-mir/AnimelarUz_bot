@@ -435,7 +435,7 @@ async def cb_post_cancel(callback: CallbackQuery, db: Database, state: FSMContex
 
 @router.callback_query(F.data == "admin_add_anime")
 async def cb_add_anime(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
-    if not await _ensure_admin(callback.fromuser if hasattr(callback, "from_user") else callback.from_user, db):
+    if not await _ensure_admin(callback.from_user, db):
         await callback.answer("⛔️ Ruxsat yo'q.", show_alert=True)
         return
     await state.set_state(AddAnimeSG.title)
@@ -491,13 +491,15 @@ async def anime_start_episode(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(StateFilter(AddAnimeSG.status), F.data.in_({"status_ongoing", "status_completed"}))
 async def anime_status(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
     status_text = "Davom etmoqda" if callback.data == "status_ongoing" else "Tugallangan"
     await state.update_data(status=status_text)
     await state.set_state(AddAnimeSG.hashtag)
-    await callback.message.edit_text(
-        f"✅ Holati: <b>{status_text}</b>\n\nHashtag yuboring (# belgisiz, masalan: <code>naruto</code>):",
-        reply_markup=cancel_kb(),
-    )
+    if callback.message:
+        await callback.message.edit_text(
+            f"✅ Holati: <b>{status_text}</b>\n\nHashtag yuboring (# belgisiz, masalan: <code>naruto</code>):",
+            reply_markup=cancel_kb(),
+        )
 
 @router.message(StateFilter(AddAnimeSG.hashtag), F.text)
 async def anime_hashtag(message: Message, state: FSMContext) -> None:
@@ -530,7 +532,7 @@ async def anime_banner(message: Message, state: FSMContext) -> None:
     await state.set_state(AddAnimeSG.videos)
     from keyboards.inline import finish_videos_kb
     await message.answer(
-        "✅ Banner saqlandi.\n\nEndi animening qismlarini (video fayllarini) ketma-ket yuboring. Barcha videolar yuborib bo'lingach '✅ Videolarni saqlash' tugmasini bosing:",
+        "✅ Banner saqlandi.\n\nEndi animening qismlarini (video fayllarini) ketma-ket yuboring. Har bir videoni qabul qilgach bot tasdiqlaydi. Barcha videolar yuborib bo'lingach '✅ Videolarni saqlash' tugmasini bosing:",
         reply_markup=finish_videos_kb(),
     )
 
@@ -541,9 +543,16 @@ async def anime_videos(message: Message, state: FSMContext) -> None:
         return
     
     data = await state.get_data()
-    videos = data.get("videos", [])
+    videos = list(data.get("videos", []))
     videos.append(file_id)
     await state.update_data(videos=videos)
+    from keyboards.inline import finish_videos_kb
+    await message.answer(
+        f"📹 <b>{len(videos)}-qism qabul qilindi!</b>\n\n"
+        "Keyingi qismni yuboring yoki barcha qismlar tugagan bo'lsa tugmani bosing:",
+        reply_markup=finish_videos_kb(),
+    )
+
 
 @router.callback_query(StateFilter(AddAnimeSG.videos), F.data == "finish_videos")
 async def anime_videos_finish(callback: CallbackQuery, bot: Bot, db: Database, state: FSMContext) -> None:
