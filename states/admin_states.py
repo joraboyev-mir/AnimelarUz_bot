@@ -1,0 +1,24 @@
+"""FSM states for the AnimeUz admin panel."""
+
+from aiogram.fsm.state import State, StatesGroup
+
+
+class AddAnimeSG(StatesGroup):
+    title = State()
+    current_episode = State()
+    total_episodes = State()
+    hashtag = State()
+    video = State()
+
+
+class ChannelSG(StatesGroup):
+    add_channel = State()
+
+
+class AdminManageSG(StatesGroup):
+    add_admin = State()
+    remove_admin = State()
+
+
+class SearchSG(StatesGroup):
+    query = State()
