@@ -67,14 +67,19 @@ class SubscriptionMiddleware(BaseMiddleware):
         markup = subscription_kb(missing)
         try:
             if callback is not None:
-                await callback.answer()
+                try:
+                    await callback.answer()
+                except Exception:
+                    pass
                 if callback.message:
                     await callback.message.edit_text(SUBSCRIBE_TEXT, reply_markup=markup)
                 else:
                     await bot.send_message(user.id, SUBSCRIBE_TEXT, reply_markup=markup)
             elif isinstance(event, Message):
                 await event.answer(SUBSCRIBE_TEXT, reply_markup=markup)
-        except Exception:
+        except Exception as exc:
+            if "message is not modified" in str(exc).lower():
+                return None
             logger.exception("Obuna xabarini yuborishda xatolik. user_id=%s", user.id)
             try:
                 await bot.send_message(user.id, SUBSCRIBE_TEXT, reply_markup=markup)
@@ -127,4 +132,4 @@ async def is_user_subscribed(bot: Bot, channel_ref: str, user_id: int) -> bool:
             user_id,
             exc,
         )
-        return False
+        return True

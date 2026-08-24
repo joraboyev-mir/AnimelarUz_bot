@@ -17,6 +17,7 @@ DB_PATH: Path = DATA_DIR / "animeuz.db"
 
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
 MAIN_CHANNEL_USERNAME: str = os.getenv("MAIN_CHANNEL_USERNAME", "").strip().lstrip("@")
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
 
 
 def _parse_int(name: str, required: bool = True) -> int:
@@ -34,7 +35,7 @@ def _parse_int(name: str, required: bool = True) -> int:
 SUPER_ADMIN_ID: int = _parse_int("SUPER_ADMIN_ID")
 MAIN_CHANNEL_ID: int = _parse_int("MAIN_CHANNEL_ID")
 
-BOT_USERNAME: str = "animeuz_rasmiy_bot"
+BOT_USERNAME: str = os.getenv("BOT_USERNAME", "animeuz_rasmiy_bot").strip().lstrip("@")
 PAGE_SIZE: int = 6
 
 
@@ -46,6 +47,10 @@ def validate_config() -> None:
         raise RuntimeError("SUPER_ADMIN_ID musbat butun son bo'lishi kerak.")
     if MAIN_CHANNEL_ID == 0:
         raise RuntimeError("MAIN_CHANNEL_ID noto'g'ri. Kanal ID ni kiriting (masalan, -100...).")
+    if not GEMINI_API_KEY:
+        logging.getLogger(__name__).warning(
+            "GEMINI_API_KEY ko'rsatilmagan. Gemini xizmatisiz ishlaydi (fallback ishlatiladi)."
+        )
 
 
 def setup_logging() -> None:

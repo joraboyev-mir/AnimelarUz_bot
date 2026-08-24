@@ -1,9 +1,11 @@
-"""Admin panel: anime upload FSM, mandatory channels, and admin management."""
+"""Admin panel: anime upload FSM, forward→preview, mandatory channels, and admin management."""
 
 from __future__ import annotations
 
 import html
 import logging
+import re
+import uuid
 from typing import Optional
 
 from aiogram import Bot, F, Router
@@ -12,7 +14,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, User
 
-from config import MAIN_CHANNEL_ID, SUPER_ADMIN_ID
+from config import BOT_USERNAME, MAIN_CHANNEL_ID, MAIN_CHANNEL_USERNAME, SUPER_ADMIN_ID
 from database.db import Database
 from keyboards.inline import (
     admin_panel_kb,
@@ -22,20 +24,47 @@ from keyboards.inline import (
     cancel_kb,
     channels_delete_kb,
     channels_menu_kb,
+    confirm_post_kb,
+    watch_anime_kb,
 )
-from states.admin_states import AddAnimeSG, AdminManageSG, ChannelSG
+from services.gemini import fetch_anime_info
+from states.admin_states import AddAnimeSG, AdminManageSG, ChannelSG, ForwardAnimeSG
 
 logger = logging.getLogger(__name__)
 router = Router(name="admin")
 
-CHANNEL_CAPTION = (
-    "▶️ Anime: {title}\n"
-    "[🎬] Qismi: {current_episode}/{total_episodes}\n"
-    "[🎙] Ovoz berdi: AnimeUz Jamoasi\n"
-    "[💯] Hashtag: #{hashtag}\n"
-    "[📌] Kanal: @anime_uz_rasmiy_kanal"
+# ── Kanal post formati ───────────────────────────────────────────────────
+CHANNEL_CAPTION_TPL = (
+    "<b>{title}</b>\n"
+    "✨ ✦ ── ✦ ✨ ✦ ── ✦ ✨\n"
+    "├▪️ Qism: {episode}\n"
+    "├▪️ Holati: Davom etmoqda\n"
+    "├▪️ Sifat: 720p, 1080p\n"
+    "├▪️ Janrlari: {genres}\n"
+    "├▪️ Jamoa: AnimeUz Jamoasi\n"
+    "└▪️ Kanal: @{channel}\n\n"
+    "📖 Mazmuni: {description}\n"
+    "✨ ✦ ── ✦ ✨ ✦ ── ✦ ✨"
 )
 
+
+def _build_caption(
+    title: str,
+    episode: int,
+    genres: str,
+    description: str,
+    channel: str,
+) -> str:
+    return CHANNEL_CAPTION_TPL.format(
+        title=html.escape(title),
+        episode=episode,
+        genres=html.escape(genres),
+        description=html.escape(description),
+        channel=channel.lstrip("@"),
+    )
+
+
+# ── Helper funksiyalar ────────────────────────────────────────────────────
 
 def _is_super(user_id: int) -> bool:
     return user_id == SUPER_ADMIN_ID
@@ -76,6 +105,34 @@ async def _show_panel(target: Message | CallbackQuery, db: Database) -> None:
     else:
         await target.answer(_panel_text(), reply_markup=markup)
 
+
+def _extract_file_id(message: Message) -> Optional[str]:
+    if message.video:
+        return message.video.file_id
+    if message.document and message.document.mime_type and message.document.mime_type.startswith("video/"):
+        return message.document.file_id
+    if message.animation:
+        return message.animation.file_id
+    return None
+
+
+def _extract_title_from_caption(caption: str) -> Optional[str]:
+    """Caption matnidan anime nomini ajratib olishga harakat qiladi."""
+    # Birinchi satrni nom sifatida qabul qilamiz (agar bo'lsa)
+    first_line = caption.strip().splitlines()[0].strip() if caption.strip() else ""
+    # Raqam/emoji/maxsus belgilarni olib tashlaymiz (agar nom bo'lsa)
+    cleaned = re.sub(r"^[\d\.\)\-\s\U0001F300-\U0001FFFF]+", "", first_line).strip()
+    if len(cleaned) >= 2:
+        return cleaned
+    # Agar birinchi satr mos kelmasa, barcha matndan "Anime:" yoki nomni qidiramiz
+    match = re.search(r"(?:anime|nom|title)[:\s]+(.+)", caption, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    # Oxirgi variant: birinchi satrni qaytaramiz
+    return first_line if len(first_line) >= 2 else None
+
+
+# ── Admin panel ──────────────────────────────────────────────────────────
 
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, db: Database, state: FSMContext) -> None:
@@ -129,7 +186,248 @@ async def cb_admin_stats(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("Statistikani olishda xatolik yuz berdi.", show_alert=True)
 
 
-# ── Anime FSM ───────────────────────────────────────────────────────────
+# ── FORWARD → PREVIEW → KANALGA YUBORISH (ASOSIY YANGI LOGIKA) ─────────
+
+@router.message(F.forward_origin | F.forward_from | F.forward_from_chat)
+async def handle_forwarded_video(message: Message, bot: Bot, db: Database, state: FSMContext) -> None:
+    """Admin boshqa kanaldan videoni forward qilganda ishga tushadi."""
+    user = message.from_user
+    if not await _ensure_admin(user, db):
+        return  # Adminlar uchun ishlatiladi
+
+    file_id = _extract_file_id(message)
+    if not file_id:
+        # Video emas (rasm, matn va h.k.) – e'tiborsiz qoldiramiz
+        return
+
+    # Caption'dan anime nomini ajratib olish
+    caption_text = message.caption or message.text or ""
+    title = _extract_title_from_caption(caption_text)
+
+    if not title:
+        # Nom topilmadi – admindan so'raymiz
+        await state.update_data(
+            file_id=file_id,
+            awaiting_title=True,
+        )
+        await state.set_state(ForwardAnimeSG.preview)
+        await message.answer(
+            "📹 Video qabul qilindi, lekin caption'dan anime nomi aniqlanmadi.\n\n"
+            "Iltimos, anime nomini yuboring:",
+            reply_markup=cancel_kb(),
+        )
+        return
+
+    await _build_preview(message, bot, db, state, file_id=file_id, title=title)
+
+
+@router.message(StateFilter(ForwardAnimeSG.preview), F.text)
+async def forward_title_input(message: Message, bot: Bot, db: Database, state: FSMContext) -> None:
+    """Agar caption'dan nom topilmasa, admin qo'lda nom kiritadi."""
+    data = await state.get_data()
+    if not data.get("awaiting_title"):
+        return
+
+    title = (message.text or "").strip()
+    if len(title) < 2:
+        await message.answer("Anime nomi juda qisqa. Qaytadan yuboring:", reply_markup=cancel_kb())
+        return
+
+    file_id = str(data.get("file_id", ""))
+    if not file_id:
+        await message.answer("Xatolik: video topilmadi. Qaytadan forward qiling.")
+        await state.clear()
+        return
+
+    await _build_preview(message, bot, db, state, file_id=file_id, title=title)
+
+
+async def _build_preview(
+    message: Message,
+    bot: Bot,
+    db: Database,
+    state: FSMContext,
+    *,
+    file_id: str,
+    title: str,
+) -> None:
+    """Gemini'dan ma'lumot olib, adminga preview ko'rsatadi."""
+    await state.clear()
+
+    # Gemini'dan janr va ta'rifni olish
+    thinking_msg = await message.answer("🤖 Gemini AI ma'lumot tayyorlamoqda...")
+    info = await fetch_anime_info(title)
+
+    channel = MAIN_CHANNEL_USERNAME or str(MAIN_CHANNEL_ID)
+    caption = _build_caption(
+        title=title,
+        episode=1,
+        genres=info.genres,
+        description=info.description,
+        channel=channel,
+    )
+
+    # Yagona ID generatsiya qilamiz (state'da saqlash uchun)
+    post_id = uuid.uuid4().hex[:12]
+
+    # Foydalanuvchi (admin) ID sini olamiz
+    admin_id = message.from_user.id if message.from_user else 0
+
+    # Pending post'ni state'da saqlaymiz
+    await state.update_data(
+        pending_posts={
+            post_id: {
+                "file_id": file_id,
+                "title": title,
+                "episode": 1,
+                "genres": info.genres,
+                "description": info.description,
+                "caption": caption,
+                "admin_id": admin_id,
+            }
+        }
+    )
+
+    # Thinking xabarini o'chiramiz
+    try:
+        await thinking_msg.delete()
+    except Exception:
+        pass
+
+    # Adminga preview ko'rsatamiz
+    preview_header = (
+        "👁 <b>Preview (Oldindan ko'rish)</b>\n"
+        "──────────────────\n"
+        "Post shu ko'rinishda kanalga borib tushadi.\n"
+        "Tasdiqlaysizmi yoki bekor qilasizmi?"
+    )
+    await message.answer(preview_header)
+
+    try:
+        await bot.send_video(
+            chat_id=message.chat.id,
+            video=file_id,
+            caption=caption,
+            reply_markup=confirm_post_kb(post_id),
+        )
+    except TelegramAPIError as exc:
+        logger.exception("Preview video yuborishda xatolik: %s", exc)
+        await message.answer(
+            f"⚠️ Videoni ko'rsatib bo'lmadi: {exc}\n"
+            "Lekin tasdiqlasangiz, kanalga yuboriladi.",
+            reply_markup=confirm_post_kb(post_id),
+        )
+
+
+# ── TASDIQLASH / BEKOR QILISH CALLBACK'LARI ────────────────────────────
+
+@router.callback_query(F.data.startswith("post_confirm_"))
+async def cb_post_confirm(callback: CallbackQuery, bot: Bot, db: Database, state: FSMContext) -> None:
+    """Admin tasdiqlash tugmasini bosdi → kanalga yuboradi va bazaga saqlaydi."""
+    user = callback.from_user
+    if not await _ensure_admin(user, db):
+        await callback.answer("⛔️ Ruxsat yo'q.", show_alert=True)
+        return
+
+    post_id = (callback.data or "").removeprefix("post_confirm_")
+    data = await state.get_data()
+    pending: dict = data.get("pending_posts", {})
+    post = pending.get(post_id)
+
+    if not post:
+        await callback.answer("Bu post allaqachon qayta ishlangan yoki muddati o'tgan.", show_alert=True)
+        return
+
+    file_id: str = post["file_id"]
+    title: str = post["title"]
+    episode: int = int(post.get("episode", 1))
+    genres: str = post["genres"]
+    description: str = post["description"]
+    caption: str = post["caption"]
+
+    await callback.answer("⏳ Yuborilmoqda...")
+
+    # Bazaga saqlash
+    try:
+        anime_id = await db.add_anime(
+            title=title,
+            current_episode=episode,
+            total_episodes=episode,  # Hozircha 1-qism, keyinchalik yangilanadi
+            file_id=file_id,
+            hashtag=re.sub(r"\W+", "", title.lower()),
+        )
+    except Exception:
+        logger.exception("Anime bazaga saqlanmadi.")
+        await callback.answer("❌ Bazaga yozishda xatolik.", show_alert=True)
+        return
+
+    # Kanalga yuborish – faqat "Tomosha Qilish" tugmasi bilan
+    bot_uname = BOT_USERNAME
+    try:
+        await bot.send_video(
+            chat_id=MAIN_CHANNEL_ID,
+            video=file_id,
+            caption=caption,
+            reply_markup=watch_anime_kb(bot_uname, anime_id),
+        )
+    except TelegramAPIError as exc:
+        logger.exception("Kanalga video yuborilmadi: %s", exc)
+        if callback.message:
+            await callback.message.answer(
+                f"⚠️ Kanalga yuborib bo'lmadi: {exc}\n"
+                "Bazaga saqlandı."
+            )
+        # pending'dan o'chiramiz
+        pending.pop(post_id, None)
+        await state.update_data(pending_posts=pending)
+        return
+
+    # pending'dan o'chirish
+    pending.pop(post_id, None)
+    await state.update_data(pending_posts=pending)
+
+    # Preview tugmasini o'chiramiz
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer(
+            f"✅ <b>Kanalga muvaffaqiyatli yuborildi!</b>\n\n"
+            f"🎌 Nom: <b>{html.escape(title)}</b>\n"
+            f"🆔 Anime ID: <code>{anime_id}</code>\n"
+            f"📺 Qism: <b>{episode}</b>",
+            reply_markup=back_to_admin_kb(),
+        )
+
+
+@router.callback_query(F.data.startswith("post_cancel_"))
+async def cb_post_cancel(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
+    """Admin bekor qilish tugmasini bosdi."""
+    user = callback.from_user
+    if not await _ensure_admin(user, db):
+        await callback.answer("⛔️ Ruxsat yo'q.", show_alert=True)
+        return
+
+    post_id = (callback.data or "").removeprefix("post_cancel_")
+    data = await state.get_data()
+    pending: dict = data.get("pending_posts", {})
+    pending.pop(post_id, None)
+    await state.update_data(pending_posts=pending)
+
+    await callback.answer("❌ Bekor qilindi.")
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.message.answer(
+            "❌ Post bekor qilindi. Video kanalga yuborilmadi.",
+            reply_markup=back_to_admin_kb(),
+        )
+
+
+# ── Qo'lda Anime qo'shish FSM (oldingi funksionallik saqlanadi) ─────────
 
 @router.callback_query(F.data == "admin_add_anime")
 async def cb_add_anime(callback: CallbackQuery, db: Database, state: FSMContext) -> None:
@@ -217,16 +515,6 @@ async def anime_hashtag(message: Message, state: FSMContext) -> None:
     )
 
 
-def _extract_file_id(message: Message) -> Optional[str]:
-    if message.video:
-        return message.video.file_id
-    if message.document and message.document.mime_type and message.document.mime_type.startswith("video/"):
-        return message.document.file_id
-    if message.animation:
-        return message.animation.file_id
-    return None
-
-
 @router.message(StateFilter(AddAnimeSG.video))
 async def anime_video(message: Message, bot: Bot, db: Database, state: FSMContext) -> None:
     file_id = _extract_file_id(message)
@@ -242,29 +530,25 @@ async def anime_video(message: Message, bot: Bot, db: Database, state: FSMContex
     current_episode = int(data.get("current_episode", 1))
     total_episodes = int(data.get("total_episodes", 1))
     hashtag = str(data.get("hashtag", "")).strip()
-    caption = CHANNEL_CAPTION.format(
+
+    # Gemini'dan info olish
+    thinking = await message.answer("🤖 Gemini AI janr va ta'rif tayyorlamoqda...")
+    info = await fetch_anime_info(title)
+    try:
+        await thinking.delete()
+    except Exception:
+        pass
+
+    channel = MAIN_CHANNEL_USERNAME or str(MAIN_CHANNEL_ID)
+    caption = _build_caption(
         title=title,
-        current_episode=current_episode,
-        total_episodes=total_episodes,
-        hashtag=hashtag,
+        episode=current_episode,
+        genres=info.genres,
+        description=info.description,
+        channel=channel,
     )
 
-    channel_ok = False
-    try:
-        await bot.send_video(
-            chat_id=MAIN_CHANNEL_ID,
-            video=file_id,
-            caption=caption,
-        )
-        channel_ok = True
-    except TelegramAPIError as exc:
-        logger.exception("Asosiy kanalga video yuborilmadi: %s", exc)
-        await message.answer(
-            "⚠️ Videoni asosiy kanalga yuborib bo'lmadi. "
-            "Bot kanalda admin ekanligini va MAIN_CHANNEL_ID to'g'riligini tekshiring.\n"
-            "Qism baribir bazaga saqlanadi."
-        )
-
+    # Bazaga saqlash
     try:
         anime_id = await db.add_anime(
             title=title,
@@ -278,6 +562,24 @@ async def anime_video(message: Message, bot: Bot, db: Database, state: FSMContex
         await message.answer("❌ Bazaga yozishda xatolik. Qaytadan urinib ko'ring.", reply_markup=cancel_kb())
         return
 
+    # Kanalga yuborish
+    channel_ok = False
+    try:
+        await bot.send_video(
+            chat_id=MAIN_CHANNEL_ID,
+            video=file_id,
+            caption=caption,
+            reply_markup=watch_anime_kb(BOT_USERNAME, anime_id),
+        )
+        channel_ok = True
+    except TelegramAPIError as exc:
+        logger.exception("Asosiy kanalga video yuborilmadi: %s", exc)
+        await message.answer(
+            "⚠️ Videoni asosiy kanalga yuborib bo'lmadi. "
+            "Bot kanalda admin ekanligini va MAIN_CHANNEL_ID to'g'riligini tekshiring.\n"
+            "Qism baribir bazaga saqlanadi."
+        )
+
     await state.clear()
     channel_line = "✅ Asosiy kanalga yuborildi." if channel_ok else "⚠️ Kanalga yuborilmadi."
     await message.answer(
@@ -286,6 +588,7 @@ async def anime_video(message: Message, bot: Bot, db: Database, state: FSMContex
         f"▶️ Nomi: <b>{html.escape(title)}</b>\n"
         f"🎬 Qism: <b>{current_episode}/{total_episodes}</b>\n"
         f"#️⃣ Hashtag: <b>#{html.escape(hashtag)}</b>\n"
+        f"🎭 Janrlar: <b>{html.escape(info.genres)}</b>\n"
         f"{channel_line}",
         reply_markup=back_to_admin_kb(),
     )

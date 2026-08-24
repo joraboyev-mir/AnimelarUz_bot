@@ -22,3 +22,9 @@ class AdminManageSG(StatesGroup):
 
 class SearchSG(StatesGroup):
     query = State()
+
+
+class ForwardAnimeSG(StatesGroup):
+    """Admin forward qilgan video uchun preview holati."""
+    preview = State()
+

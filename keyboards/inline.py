@@ -159,3 +159,30 @@ def back_to_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🏠 Asosiy menyu", callback_data="main_menu")
     return builder.as_markup()
+
+
+def confirm_post_kb(post_id: str) -> InlineKeyboardMarkup:
+    """Admin preview ostida: tasdiqlash yoki bekor qilish tugmalari."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✅ Kanalga yuborish (Tasdiqlash)",
+            callback_data=f"post_confirm_{post_id}",
+        ),
+        InlineKeyboardButton(
+            text="❌ Bekor qilish",
+            callback_data=f"post_cancel_{post_id}",
+        ),
+    )
+    return builder.as_markup()
+
+
+def watch_anime_kb(bot_username: str, anime_id: int) -> InlineKeyboardMarkup:
+    """Kanalga yuboriladigan post ostidagi 'Tomosha Qilish' tugmasi."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✨ Tomosha Qilish ✨",
+        url=f"https://t.me/{bot_username}?start=watch_{anime_id}",
+    )
+    return builder.as_markup()
+
