@@ -45,7 +45,7 @@ def build_download_url(channel_username: str, hashtag: str) -> str:
     tag = hashtag.lstrip("#")
     if channel_username:
         return f"https://t.me/{channel_username}?q={quote('#' + tag)}"
-    return f"https://t.me/animeuz_rasmiy_bot"
+    return f"https://t.me/anime_uz_rasmiy_kanal"
 
 
 def episode_caption(item: AnimeRecord) -> str:

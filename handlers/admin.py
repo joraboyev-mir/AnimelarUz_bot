@@ -33,7 +33,7 @@ CHANNEL_CAPTION = (
     "[🎬] Qismi: {current_episode}/{total_episodes}\n"
     "[🎙] Ovoz berdi: AnimeUz Jamoasi\n"
     "[💯] Hashtag: #{hashtag}\n"
-    "[📌] Kanal: @animeuz_rasmiy_bot"
+    "[📌] Kanal: @anime_uz_rasmiy_kanal"
 )
 
 
