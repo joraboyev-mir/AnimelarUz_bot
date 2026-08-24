@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import NamedTuple
 
@@ -23,61 +24,74 @@ def _get_client() -> genai.Client:
 
 
 class AnimeInfo(NamedTuple):
-    genres: str        # masalan: "Sarguzasht, Fantastika, Drama"
-    description: str   # O'zbek tilida 4 gaplik ta'rif
+    genres: str
+    description: str
 
 
 _FALLBACK = AnimeInfo(
     genres="Sarguzasht, Fantastika",
-    description="Bu anime ajoyib voqealar va qahramonlik bilan to'la. Tomosha qilishga arziydi! Har bir qismida kutilmagan burilishlar bor. Barcha yoshdagi tomoshabinlar uchun qiziqarli.",
+    description=(
+        "Bu animeda asosiy qahramon kuchli dushmanlar va to'siqlar bilan kurashib, "
+        "o'zini isbotlashga harakat qiladi. Voqealar shiddatli va kutilmagan burilishlar bilan to'la. "
+        "Do'stlik va sadoqat bu animening asosiy mavzularidir. "
+        "Har bir qism tomoshabinni yangi kashfiyotlarga da'vat etadi."
+    ),
 )
 
-_PROMPT_TPL = (
-    'Anime: "{title}"\n\n'
-    "Menga faqat quyidagi formatda javob ber, boshqa hech narsa yozma:\n"
-    "Janrlar: <2-3 ta janr, vergul bilan ajratilgan>\n"
-    "Tavsif: <O'zbek tilida kamida 4 ta mazmunli va qiziqarli gapdan iborat bo'lgan, animening haqiqiy mazmuni va voqealar rivojini to'liq ochib beradigan batafsil ta'rif>"
+# Alohida promptlar — har biri bitta javob qaytaradi
+_GENRES_PROMPT = (
+    '"{title}" animesining asosiy janrlarini yoz '
+    "(vergul bilan ajratilgan 2-3 ta janr, faqat janr nomlarini yoz, boshqa hech narsa yozma):"
+)
+_DESC_PROMPT = (
+    '"{title}" animesining syujeti haqida O\'zbek tilida '
+    "4 ta qisqa gap yoz. Faqat animening haqiqiy mazmunini yoz, "
+    "boshqa hech narsa yozma:"
 )
 
 
 async def fetch_anime_info(title: str) -> AnimeInfo:
-    """Gemini orqali anime janrlari va O'zbek tilidagi qisqacha ta'rifni qaytaradi."""
+    """Gemini orqali anime janrlari va O'zbek tilidagi ta'rifni qaytaradi."""
     if not GEMINI_API_KEY:
         logger.warning("GEMINI_API_KEY yo'q, fallback ishlatilmoqda.")
         return _FALLBACK
 
-    prompt = _PROMPT_TPL.format(title=title)
     try:
         client = _get_client()
-        response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=500,
-                temperature=0.7,
+        # Ikkala so'rovni parallel yuboramiz
+        genres_prompt = _GENRES_PROMPT.format(title=title)
+        desc_prompt = _DESC_PROMPT.format(title=title)
+
+        genres_resp, desc_resp = await asyncio.wait_for(
+            asyncio.gather(
+                client.aio.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=genres_prompt,
+                    config=types.GenerateContentConfig(max_output_tokens=40, temperature=0.3),
+                ),
+                client.aio.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=desc_prompt,
+                    config=types.GenerateContentConfig(max_output_tokens=280, temperature=0.5),
+                ),
             ),
+            timeout=12.0,
         )
-        text = (response.text or "").strip()
-        return _parse_response(text)
+
+        genres = (genres_resp.text or "").strip().rstrip(".")
+        description = (desc_resp.text or "").strip()
+
+        # Bo'sh bo'lsa fallback
+        genres = genres if genres else _FALLBACK.genres
+        description = description if description else _FALLBACK.description
+
+        logger.info("Gemini OK: %s | %s...", genres[:40], description[:40])
+        return AnimeInfo(genres=genres, description=description)
+
+    except asyncio.TimeoutError:
+        logger.warning("Gemini timeout, fallback.")
+        return _FALLBACK
     except Exception as exc:
-        logger.warning("Gemini javob bermadi (%s), fallback ishlatilmoqda.", exc)
+        logger.warning("Gemini xatolik (%s), fallback.", exc)
         return _FALLBACK
 
-
-def _parse_response(text: str) -> AnimeInfo:
-    """Gemini'dan kelgan matnni janrlar va ta'rifga ajratadi."""
-    genres = _FALLBACK.genres
-    description = _FALLBACK.description
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.lower().startswith("janrlar:"):
-            val = stripped.split(":", 1)[1].strip()
-            if val:
-                genres = val
-        elif stripped.lower().startswith("tavsif:"):
-            val = stripped.split(":", 1)[1].strip()
-            if val:
-                description = val
-
-    return AnimeInfo(genres=genres, description=description)
